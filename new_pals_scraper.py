@@ -13,17 +13,31 @@ data_path = os.path.join(path, 'data', 'new_final_hfp_npi.csv')
 # use list of 526 names from NPI results (2 missing from NPI)
 df = pd.read_csv(data_path, index_col=False)
 
-# there is probably a way to generalize these changes, but this works for now
-df['last_name'] = df['last_name'].replace('BAKER-EVENS', 'BAKER EVENS')
-df['last_name'] = df['last_name'].replace('COLON RIVERA', 'COLON-RIVERA')
-df['last_name'] = df['last_name'].replace('DE ROOS', 'DEROOS')
-df['last_name'] = df['last_name'].replace('LA JOIE', 'LAJOIE')
-df['last_name'] = df['last_name'].replace('LEVITT-GOPIE', 'GOPIE')
-df['last_name'] = df['last_name'].replace('OHARA', "O'HARA")
-df['last_name'] = df['last_name'].replace('STOBART-GALLAGHER', 'STOBART GALLAGHER')
-df['last_name'] = df['last_name'].replace('KHATRI', 'KHATRI-CHHETRI')
+# create dicts of name corrections - changes NPI to match PALS
+last_names_corrected = {
+    'BAKER-EVENS': 'BAKER EVENS',
+    'COLON RIVERA': 'COLON-RIVERA',
+    'DE ROOS': 'DEROOS',
+    'LA JOIE': 'LAJOIE',
+    'LEVITT-GOPIE': 'GOPIE',
+    'OHARA': "O'HARA",
+    'STOBART-GALLAGHER': 'STOBART GALLAGHER',
+    'KHATRI': 'KHATRI-CHHETRI',
+    "O'BRIEN": 'OBRIEN'
+}
+
+first_names_corrected = {
+    'STACY-ANN': 'STACY ANN'
+}
+
+# update NPI input data with corrected names
+df = df.replace({'last_name': last_names_corrected})
+df = df.replace({'first_name': first_names_corrected})
+
+# and a few more idiosyncratic corrections
 df['first_name'][df['last_name'] == 'JAGIELLO'] = 'BEN'
-df['first_name'] = df['first_name'].replace('STACY-ANN', 'STACY ANN')
+df['first_name'][df['last_name'] == 'BAURER'] = 'FREDERIC'
+df['first_name'][df['last_name'] == 'MECHEM'] = 'CHARLES'
 
 
 # URLs to query
@@ -72,24 +86,21 @@ relevant_professions = ['Medicine', 'Nursing', 'Osteopathic Medicine', 'Pharmacy
 
 pals_providers = pals_providers[pals_providers['ProfessionType'].str.strip().isin(relevant_professions)]
 
-# remove results that don't match on middle initial
-names_orig = df[['first_name', 'middle_name', 'last_name']]
-names_orig = names_orig.rename(columns = {'first_name': 'FirstName', 'last_name': 'LastName', 'middle_name': 'middle_name_npi'})
+# REMOVE NAMES THAT DO NOT APPEAR IN ORIGINAL NPI DATA
 
-# pals_providers = pd.merge(pals_providers, names_orig, on = ['FirstName', 'LastName'], how='left')
+# Change one name that is listed multiple ways in PALS
+pals_providers['LastName'][pals_providers['LastName'] == 'THOMAS-LESLIE'] = 'THOMAS'
 
-# pals_providers.loc[(pals_providers['MiddleName'].notnull()) & (pals_providers['middle_name_npi'].notnull()) & (pals_providers['MiddleName'].str[0] != pals_providers['middle_name_npi'].str[0]), 'drop'] = 1
+# Use a merge to remove cases where the first and last name do not appear in NPI results (this may remove correct results if discrepancies haven't been resolved)
+npi = df[['first_name', 'last_name', 'npi', 'middle_name']]
+npi = npi.rename(columns = {'first_name': 'FirstName', 'last_name': 'LastName', 'middle_name': 'npi_middle'})
+
+pals_providers = pd.merge(pals_providers, npi, how = 'right', on = ['FirstName', 'LastName'])
+
+# If result has a middle initila, remove cases that don't match NPI
+# pals_providers.loc[(pals_providers['MiddleName'].notnull()) & (pals_providers['npi_middle'].notnull()) & (pals_providers['MiddleName'].str[0] != pals_providers['npi_middle'].str[0]), 'drop'] = 1
 
 # pals_providers = pals_providers.drop(pals_providers[pals_providers['drop'] == 1].index)
-
-# remove last names that do not appear in original NPI data and not flagged as modified
-# add flag for modified names
-modified_last = ['BAKER EVENS', 'COLON-RIVERA', 'DEROOS', 'LAJOIE', 'GOPIE', "O'HARA", 'STOBART GALLAGHER', 'JAGIELLO']
-
-pals_providers['mod'] = pals_providers['LastName'].apply(lambda x: 1 if x in (modified_last) else 0)
-pals_providers['mod'][pals_providers['FirstName'] == 'STACY ANN'] = 1
-
-pals_providers = pals_providers[pals_providers['LastName'].isin(names_orig['LastName']) | pals_providers['mod'] == 1]
 
 # remove inactive licenses if the person has at least one active license
 pals_providers['active_count'] = pals_providers.groupby(['FirstName', 'LastName'])['Status'].transform(lambda x: (x == 'Active').sum())
@@ -100,7 +111,7 @@ pals_providers = pals_providers[((pals_providers['Status'] != 'Inactive') & (pal
 pals_providers = pals_providers.drop(columns=['active_count'])
 
 
-# 2nd API
+# 2ND API
 pals_licenses = pd.DataFrame()
 url2 = "https://www.pals.pa.gov/api/SearchLoggedIn/GetPersonOrFacilityDetails"
 
