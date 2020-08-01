@@ -10,19 +10,21 @@ import os
 path = os.getcwd()
 data_path = os.path.join(path, 'data', 'new_final_hfp_npi.csv')
 
-# use list of 528 names
+# use list of 526 names from NPI results (2 missing from NPI)
 df = pd.read_csv(data_path, index_col=False)
 
-# there is probably a way to generalize these changes, but 
-df['last_name'] = df['last_name'].replace('BAKER-EVENS', 'Baker Evens')
-df['last_name'] = df['last_name'].replace('COLON RIVERA', 'Colon-Rivera')
-df['last_name'] = df['last_name'].replace('DE ROOS', 'DeRoos')
-df['last_name'] = df['last_name'].replace('LA JOIE', 'LaJoie')
-df['last_name'] = df['last_name'].replace('LEVITT-GOPIE', 'Gopie')
-df['last_name'] = df['last_name'].replace('OHARA', "O'Hara")
-df['last_name'] = df['last_name'].replace('STOBART-GALLAGHER', 'Stobart Gallagher')
-df['first_name'][df['last_name'] == 'JAGIELLO'] = 'Ben'
-df['first_name'] = df['first_name'].replace('STACY-ANN', 'Stacy Ann')
+# there is probably a way to generalize these changes, but this works for now
+df['last_name'] = df['last_name'].replace('BAKER-EVENS', 'BAKER EVENS')
+df['last_name'] = df['last_name'].replace('COLON RIVERA', 'COLON-RIVERA')
+df['last_name'] = df['last_name'].replace('DE ROOS', 'DEROOS')
+df['last_name'] = df['last_name'].replace('LA JOIE', 'LAJOIE')
+df['last_name'] = df['last_name'].replace('LEVITT-GOPIE', 'GOPIE')
+df['last_name'] = df['last_name'].replace('OHARA', "O'HARA")
+df['last_name'] = df['last_name'].replace('STOBART-GALLAGHER', 'STOBART GALLAGHER')
+df['last_name'] = df['last_name'].replace('KHATRI', 'KHATRI-CHHETRI')
+df['first_name'][df['last_name'] == 'JAGIELLO'] = 'BEN'
+df['first_name'] = df['first_name'].replace('STACY-ANN', 'STACY ANN')
+
 
 # URLs to query
 url1 = 'https://www.pals.pa.gov/api/Search/SearchForPersonOrFacilty'  # sic ('Facilty' misspelled in actual URL)
@@ -71,17 +73,31 @@ relevant_professions = ['Medicine', 'Nursing', 'Osteopathic Medicine', 'Pharmacy
 pals_providers = pals_providers[pals_providers['ProfessionType'].str.strip().isin(relevant_professions)]
 
 # remove results that don't match on middle initial
-names_orig = df.loc[:, ['first_name', 'middle_name', 'last_name']]
+names_orig = df[['first_name', 'middle_name', 'last_name']]
 names_orig = names_orig.rename(columns = {'first_name': 'FirstName', 'last_name': 'LastName', 'middle_name': 'middle_name_npi'})
 
-pals_providers = pd.merge(pals_providers, names_orig, on = ['FirstName', 'LastName'], how='left')
+# pals_providers = pd.merge(pals_providers, names_orig, on = ['FirstName', 'LastName'], how='left')
 
-pals_providers.loc[(pals_providers['MiddleName'].notnull()) & (pals_providers['middle_name_npi'].notnull()) & (pals_providers['MiddleName'].str[0] != pals_providers['middle_name_npi'].str[0]), 'drop'] = 1
+# pals_providers.loc[(pals_providers['MiddleName'].notnull()) & (pals_providers['middle_name_npi'].notnull()) & (pals_providers['MiddleName'].str[0] != pals_providers['middle_name_npi'].str[0]), 'drop'] = 1
 
-pals_providers = pals_providers.drop(pals_providers[pals_providers['drop'] == 1].index)
+# pals_providers = pals_providers.drop(pals_providers[pals_providers['drop'] == 1].index)
+
+# remove last names that do not appear in original NPI data and not flagged as modified
+# add flag for modified names
+modified_last = ['BAKER EVENS', 'COLON-RIVERA', 'DEROOS', 'LAJOIE', 'GOPIE', "O'HARA", 'STOBART GALLAGHER', 'JAGIELLO']
+
+pals_providers['mod'] = pals_providers['LastName'].apply(lambda x: 1 if x in (modified_last) else 0)
+pals_providers['mod'][pals_providers['FirstName'] == 'STACY ANN'] = 1
+
+pals_providers = pals_providers[pals_providers['LastName'].isin(names_orig['LastName']) | pals_providers['mod'] == 1]
+
+# remove inactive licenses if the person has at least one active license
+pals_providers['active_count'] = pals_providers.groupby(['FirstName', 'LastName'])['Status'].transform(lambda x: (x == 'Active').sum())
+
+pals_providers = pals_providers[((pals_providers['Status'] != 'Inactive') & (pals_providers['Status'] != 'Expired')) | (pals_providers['active_count'] == 0)]
 
 # drop columns used for filtering
-pals_providers = pals_providers.drop(columns=['drop'])
+pals_providers = pals_providers.drop(columns=['active_count'])
 
 
 # 2nd API
@@ -102,9 +118,9 @@ for j in pals_providers.index:
     page2 = json.loads(page2)
 
     # extract pin entry corresponding to license j and add to main dict
-    if (len(page2['PinItemList']) > 0):
-        pin = page2['PinItemList'][0]
-        page2.update(pin)
+    # if (len(page2['PinItemList']) > 0):
+    #     pin = page2['PinItemList'][0]
+    #     page2.update(pin)
 
     # the disciplinary records seem to be in random order and key info is in PDFs, so for now I will just flag the people with a record
     if (len(page2['DisciplinaryActionDetails']) > 0):
@@ -121,7 +137,7 @@ for j in pals_providers.index:
     # append to license datafrmae
     pals_licenses = pals_licenses.append(pd.DataFrame([page2]))
 
-pals_licenses = pals_licenses[['LicenseTypeInstructions', 'RelationshipLicenseInstructions', 'obtainedBy', 'SpecialityType', 'StatusEffectivedate', 'IssueDate', 'ExpiryDate', 'LastRenewalDate', 'NextRenewal', 'Relationship', 'AssociationDate', 'ShowFullAddress', 'ProfessionId', 'IsActiveLink', 'PinId1','PinId1ShortCode','PinId1Name','LicenseNo','PinType1Code','PinType1Name','ApplicationNo','MasterGroupId1','StatusID1','StatusID1Name','LicenseID','PinMappingID','RecordOwner','RecordOwnerID','ShowOrder','DisciplinaryAction']]
+pals_licenses = pals_licenses[['LicenseTypeInstructions', 'RelationshipLicenseInstructions', 'obtainedBy', 'SpecialityType', 'StatusEffectivedate', 'IssueDate', 'ExpiryDate', 'LastRenewalDate', 'NextRenewal', 'Relationship', 'AssociationDate', 'ShowFullAddress', 'ProfessionId', 'IsActiveLink', 'DisciplinaryAction']]
 pals_licenses.reset_index(drop=True, inplace=True)
 pals_providers.reset_index(drop=True, inplace=True)
 print(pals_providers)
