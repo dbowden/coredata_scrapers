@@ -75,7 +75,6 @@ for i in df.index:
     else:
        noresult.append((df['first_name'][i], df['last_name'][i])) 
 
-
 # FILTER INCORRECT RESULTS
 
 # recode empty strings to NaN
@@ -97,10 +96,26 @@ npi = npi.rename(columns = {'first_name': 'FirstName', 'last_name': 'LastName', 
 
 pals_providers = pd.merge(pals_providers, npi, how = 'right', on = ['FirstName', 'LastName'])
 
-# If result has a middle initila, remove cases that don't match NPI
-# pals_providers.loc[(pals_providers['MiddleName'].notnull()) & (pals_providers['npi_middle'].notnull()) & (pals_providers['MiddleName'].str[0] != pals_providers['npi_middle'].str[0]), 'drop'] = 1
+# remove cases with missing name (no name in NPI)
+pals_providers = pals_providers[~pals_providers['LastName'].isna()]
 
-# pals_providers = pals_providers.drop(pals_providers[pals_providers['drop'] == 1].index)
+# If there are multiple PersonIds associated with a name, try filtering on middle initial
+pals_providers['person_ids'] = pals_providers.groupby(['FirstName', 'LastName'])['PersonId'].transform(lambda x: x.nunique())
+
+pals_providers['drop'] = pd.Series()
+
+for i in pals_providers.index:
+    if pals_providers['person_ids'][i] > 1:
+        if pals_providers['MiddleName'][i] is not NaN and pals_providers['npi_middle'][i] is not NaN:
+            if pals_providers['MiddleName'][i][0] != pals_providers['npi_middle'][i][0]:
+                pals_providers['drop'][i] = 1
+
+pals_providers = pals_providers.drop(pals_providers[pals_providers['drop'] == 1].index)
+
+# recalculate ids per name and flag names with multiple ids
+pals_providers['person_ids'] = pals_providers.groupby(['FirstName', 'LastName'])['PersonId'].transform(lambda x: x.nunique())
+
+pals_providers['PotentialFalsePos'] = pals_providers['person_ids'].apply(lambda x: 1 if x > 1 else 0)
 
 # remove inactive licenses if the person has at least one active license
 pals_providers['active_count'] = pals_providers.groupby(['FirstName', 'LastName'])['Status'].transform(lambda x: (x == 'Active').sum())
@@ -108,7 +123,7 @@ pals_providers['active_count'] = pals_providers.groupby(['FirstName', 'LastName'
 pals_providers = pals_providers[((pals_providers['Status'] != 'Inactive') & (pals_providers['Status'] != 'Expired')) | (pals_providers['active_count'] == 0)]
 
 # drop columns used for filtering
-pals_providers = pals_providers.drop(columns=['active_count'])
+pals_providers = pals_providers.drop(columns=['active_count', 'drop', 'person_ids'])
 
 
 # 2ND API
@@ -118,6 +133,7 @@ url2 = "https://www.pals.pa.gov/api/SearchLoggedIn/GetPersonOrFacilityDetails"
 
 # get detailed license info for remaining results
 for j in pals_providers.index:
+    print(j)
     data2 = {
                 'IsFacility': pals_providers['IsFacility'][j],
                 'LicenseId': pals_providers['LicenseId'][j],
@@ -133,7 +149,7 @@ for j in pals_providers.index:
     #     pin = page2['PinItemList'][0]
     #     page2.update(pin)
 
-    # the disciplinary records seem to be in random order and key info is in PDFs, so for now I will just flag the people with a record
+    # the disciplinary records seem to be in random order and key info is in PDFs, so for now just flag the people with a record
     if (len(page2['DisciplinaryActionDetails']) > 0):
         page2.update({'DisciplinaryAction': 'Y'})
     else:
